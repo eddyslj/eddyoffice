@@ -1560,6 +1560,20 @@ if(typeof module !== 'undefined' && typeof DO_NOT_EXPORT_SSF === 'undefined') mo
       window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch((e) => console.warn('offline helper not registered', e)); });
     }
     L.sync();
+    if (/[?&]shared=1/.test(location.search)) L.openShared();
+  };
+
+  /* a file sent here from the Android Share menu (the offline helper keeps it for us) */
+  L.openShared = async function () {
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    if (!('caches' in window)) return;
+    try {
+      const c = await caches.open('eddy-inbox'); const key = new URL('shared-file', location.href).href;
+      const res = await c.match(key); if (!res) { L.o.toast('The shared file did not arrive. Please try sharing it again.', 7000); return; }
+      await c.delete(key);
+      const name = decodeURIComponent(res.headers.get('x-name') || 'shared-file'); const blob = await res.blob();
+      await L.o.open(new File([blob], name, { type: blob.type }));
+    } catch (e) { console.error(e); L.o.toast('The shared file could not be opened: ' + (e && e.message ? e.message : e), 8000); }
   };
 
   /* name of the linked file, if Save can write straight back to it */

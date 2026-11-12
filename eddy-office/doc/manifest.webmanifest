@@ -51,5 +51,25 @@
   ],
   "launch_handler": {
     "client_mode": "navigate-new"
+  },
+  "share_target": {
+    "action": "/doc/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "files": [
+        {
+          "name": "file",
+          "accept": [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-word.document.macroEnabled.12",
+            ".docx",
+            ".docm"
+          ]
+        }
+      ]
+    }
   }
 }
