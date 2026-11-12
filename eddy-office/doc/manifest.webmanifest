@@ -1,0 +1,55 @@
+{
+  "id": "/doc/",
+  "name": "Eddy Doc",
+  "short_name": "Eddy Doc",
+  "description": "Open, edit, print and save Word documents.",
+  "start_url": "/doc/",
+  "scope": "/doc/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2b579a",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "/doc/",
+      "accept": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
+          ".docx"
+        ],
+        "application/vnd.ms-word.document.macroEnabled.12": [
+          ".docm"
+        ]
+      },
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ],
+      "launch_type": "multiple-clients"
+    }
+  ],
+  "launch_handler": {
+    "client_mode": "navigate-new"
+  }
+}

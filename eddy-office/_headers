@@ -1,0 +1,11 @@
+/*/sw.js
+  Cache-Control: no-cache
+/*/manifest.webmanifest
+  Cache-Control: no-cache
+  Content-Type: application/manifest+json
+/*/index.html
+  Cache-Control: no-cache
+/sheet/
+  Cache-Control: no-cache
+/doc/
+  Cache-Control: no-cache
