@@ -237,7 +237,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       window.launchQueue.setConsumer(async (p) => { if (p && p.files && p.files.length) await L.openHandle(p.files[0]); });
     }
     if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-      window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch((e) => console.warn('offline helper not registered', e)); });
+      const reg = () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('offline helper not registered', e));
+      if (document.readyState === 'complete') reg(); else window.addEventListener('load', reg);
     }
     L.sync();
     if (/[?&]shared=1/.test(location.search)) L.openShared();

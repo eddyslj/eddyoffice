@@ -9,3 +9,5 @@
   Cache-Control: no-cache
 /doc/
   Cache-Control: no-cache
+/slides/
+  Cache-Control: no-cache
