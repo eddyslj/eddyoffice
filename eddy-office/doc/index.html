@@ -45,7 +45,12 @@ select.b{padding:0 4px;max-width:160px}
 
 #scroller{flex:1;min-height:0;overflow:auto;position:relative}
 #pagewrap{padding:24px 16px 60px;min-width:min-content}
-.page{position:relative;margin:0 auto;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.04)}
+.page{position:relative;margin:0 auto;background:transparent}
+#sheets{position:absolute;left:0;top:0;width:100%;z-index:0;pointer-events:none}
+.sheet{position:absolute;left:0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.2),0 0 0 1px rgba(0,0,0,.05)}
+.sheet .shf{position:absolute;overflow:hidden;opacity:.5}
+#doc .pgap{display:inline-block;width:100%;vertical-align:top;user-select:none}
+#doc tr.pgaprow>td{padding:0!important;border:0!important;background:transparent!important}
 #doc{outline:none;position:relative;z-index:1}
 #marks{position:absolute;left:0;right:0;top:0;pointer-events:none;z-index:2}
 .pgmark{position:absolute;left:0;right:0;height:0;border-top:2px dashed #b9c3d0}
@@ -88,8 +93,8 @@ select.b{padding:0 4px;max-width:160px}
 #printview{position:fixed;inset:0;z-index:80;background:#dfe2e6;display:flex;flex-direction:column}
 #printview .ptitle{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--accent);color:#fff}
 #printview .ptitle .grow{color:#dbe5f3}
-#printview .pbody{flex:1;min-height:0;display:flex;flex-wrap:wrap;overflow:auto}
-@media (min-width:760px){#printview .pbody{flex-wrap:nowrap;overflow:hidden}#printview .popts{min-height:0}}
+#printview .pmain{flex:1;min-height:0;display:flex;flex-wrap:wrap;overflow:auto}
+@media (min-width:760px){#printview .pmain{flex-wrap:nowrap;overflow:hidden}#printview .popts{min-height:0}}
 #printview .popts{flex:1 1 280px;max-width:340px;background:#fff;border-right:1px solid var(--line2);padding:16px;overflow:auto;display:flex;flex-direction:column;gap:11px}
 #printview .popts h2{margin:0;font-size:18px}
 #printview .popts label.f{display:flex;flex-direction:column;gap:3px;font-weight:600;color:var(--muted)}
@@ -180,6 +185,7 @@ select.b{padding:0 4px;max-width:160px}
   <div id="scroller">
     <div id="pagewrap">
       <div class="page" id="page">
+        <div id="sheets" aria-hidden="true"></div>
         <div id="marks" aria-hidden="true"></div>
         <div id="doc" class="doc" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Document"></div>
         <div id="imgbox" class="hide" aria-hidden="true"><div class="h"></div></div>
@@ -1254,7 +1260,7 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
       run = null;
     }
     for (const p of doc.querySelectorAll('p')) { if (p.dataset.b == null || !p.dataset.style) freshPara(p); if (!p.firstChild) p.appendChild(document.createElement('br')); const inner = p.querySelector('p'); if (inner) { const frag = document.createDocumentFragment(); for (const c of Array.from(p.querySelectorAll('p'))) { while (c.firstChild) c.parentNode.insertBefore(c.firstChild, c); c.remove(); } } }
-    for (const td of doc.querySelectorAll('td')) if (!td.querySelector('p,table')) { const p = document.createElement('p'); while (td.firstChild) p.appendChild(td.firstChild); td.appendChild(p); freshPara(p); }
+    for (const td of doc.querySelectorAll('td')) if (!td.querySelector('p,table') && !td.closest('.pgaprow')) { const p = document.createElement('p'); while (td.firstChild) p.appendChild(td.firstChild); td.appendChild(p); freshPara(p); }
     /* font sizes chosen from the toolbar */
     for (const e of doc.querySelectorAll('span[style*="xxx-large"],font[size]')) { const pt = ED.pendingSize || 11; if (e.tagName === 'FONT') { const s = document.createElement('span'); s.style.fontSize = pt + 'pt'; while (e.firstChild) s.appendChild(e.firstChild); e.replaceWith(s); } else e.style.fontSize = pt + 'pt'; }
     /* a section break belongs to the last paragraph when Enter splits it */
@@ -1446,7 +1452,7 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
     const img = Array.from(dt.files || []).find((f) => /^image\//.test(f.type));
     if (img && !text.trim()) { ED.insertPicture(img); return; }
     let out;
-    if (html && /data-b="\d+"/.test(html)) { const d = new DOMParser().parseFromString(html, 'text/html'); for (const x of d.querySelectorAll('[data-sect]')) delete x.dataset.sect; for (const x of d.querySelectorAll('[data-marker]')) delete x.dataset.marker; out = d.body.innerHTML.replace(/<!--(Start|End)Fragment-->/g, ''); }
+    if (html && /data-b="\d+"/.test(html)) { const d = new DOMParser().parseFromString(html, 'text/html'); ED.pages.stripGaps(d.body); for (const x of d.querySelectorAll('[data-sect]')) delete x.dataset.sect; for (const x of d.querySelectorAll('[data-marker]')) delete x.dataset.marker; out = d.body.innerHTML.replace(/<!--(Start|End)Fragment-->/g, ''); }
     else if (html) out = sanitize(html);
     else out = text.split(/\r?\n/).map((l) => '<p>' + (esc(l).replace(/\t/g, '\t') || '<br>') + '</p>').join('');
     if (!out) return;
@@ -1517,6 +1523,7 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
     });
   };
   ED.tableOp = function (op) {
+    if (ED.pages && ED.pages.clearGaps) ED.pages.clearGaps();
     const p = ED.curPara(); const td = p && p.closest('td'); if (!td) return ED.toast('Click inside a table first.');
     const t = td.closest('table'); const M = tableMap(t); const at = M.pos.get(td);
     ED.cmd(() => {
@@ -1553,9 +1560,10 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
       if (op !== 'delTable' && document.contains(t)) t.dataset.changed = '1';
     });
   };
-  ED.cellShade = function (hex) { const p = ED.curPara(); const td = p && p.closest('td'); if (!td) return; ED.cmd(() => { const t = td.closest('table'); const M = tableMap(t); const r = getSelection().getRangeAt(0); const cells = Array.from(t.querySelectorAll('td')).filter((c) => r.intersectsNode(c)); for (const c of (cells.length ? cells : [td])) { c.style.backgroundColor = hex ? hex : ''; c.dataset.shd = hex ? hex.replace('#', '').toUpperCase() : ''; } }); };
+  ED.cellShade = function (hex) {
+    if (ED.pages && ED.pages.clearGaps) ED.pages.clearGaps(); const p = ED.curPara(); const td = p && p.closest('td'); if (!td) return; ED.cmd(() => { const t = td.closest('table'); const M = tableMap(t); const r = getSelection().getRangeAt(0); const cells = Array.from(t.querySelectorAll('td')).filter((c) => r.intersectsNode(c)); for (const c of (cells.length ? cells : [td])) { c.style.backgroundColor = hex ? hex : ''; c.dataset.shd = hex ? hex.replace('#', '').toUpperCase() : ''; } }); };
   ED.cellMove = function (td, d) {
-    const t = td.closest('table'); const cells = Array.from(t.querySelectorAll('td')).filter((c) => c.closest('table') === t); let i = cells.indexOf(td) + d;
+    const t = td.closest('table'); const cells = Array.from(t.querySelectorAll('td')).filter((c) => c.closest('table') === t && !c.closest('.pgaprow')); let i = cells.indexOf(td) + d;
     if (i >= cells.length) { const last = cells[cells.length - 1]; const r = document.createRange(); r.selectNodeContents(last.querySelector('p') || last); r.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(r); ED.tableOp('rowBelow'); const nc = Array.from(t.querySelectorAll('td')).filter((c) => c.closest('table') === t); i = Math.min(i, nc.length - 1); placeIn(nc[i]); return; }
     if (i < 0) return; placeIn(cells[i]);
   };
@@ -1584,6 +1592,8 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
   /* ---------- breaking the document into pages ---------- */
   const contentH = () => px(ED.doc.sect.h - ED.doc.sect.mt - ED.doc.sect.mb);
   function textNodes(el) { const out = []; const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => n.nodeValue.length && !(n.parentElement && n.parentElement.closest('.atomh,.atomb,[contenteditable="false"]')) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT }); let n; while ((n = w.nextNode())) out.push(n); return out; }
+  const countChars = (el) => textNodes(el).reduce((a, n) => a + n.nodeValue.length, 0);
+  function locateChar(el, k) { const nodes = textNodes(el); let t = 0; for (const n of nodes) { const L = n.nodeValue.length; if (k < t + L || (k === t + L && n === nodes[nodes.length - 1])) return [n, k - t]; t += L; } return null; }
   function splitPara(el, limitBottom, pageTop) {
     if (el.querySelector('img,.atom:not(.atomh)')) return null;
     const nodes = textNodes(el); if (!nodes.length) return null;
@@ -1601,6 +1611,7 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
     const rest = el.cloneNode(false); rest.appendChild(rg.extractContents());
     rest.dataset.cont = '1'; rest.style.paddingTop = '0px'; rest.style.textIndent = '0px'; el.style.paddingBottom = '0px';
     if (!rest.textContent.length) return 'fits';
+    rest._coff = (el._coff || 0) + k; rest._pgbBase = el._pgbBase || 0; rest._start = { kind: 'char', c: rest._coff };
     return rest;
   }
   function splitTable(t, limitBottom, pageTop) {
@@ -1615,6 +1626,7 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
     const rest = t.cloneNode(false); const cg = t.querySelector(':scope > colgroup'); if (cg) rest.appendChild(cg.cloneNode(true)); const tb = document.createElement('tbody'); rest.appendChild(tb);
     for (const h of hdr) tb.appendChild(h.cloneNode(true)); for (let i = cut; i < rows.length; i++) tb.appendChild(rows[i]);
     rest.dataset.cont = '1';
+    const map = t._rmap || rows.map((_, i) => i); rest._rmap = hdr.map(() => -1).concat(map.slice(cut)); rest._start = { kind: 'row', r: map[cut] };
     return rest;
   }
   P.layout = function () {
@@ -1624,45 +1636,110 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
     const newPage = (start) => { page = document.createElement('div'); page.className = 'doc mpage'; page.style.cssText = 'position:relative;width:' + cw + 'px;min-height:' + ch + 'px'; M.appendChild(page); pages.push(page); starts.push(start); pageTop = page.getBoundingClientRect().top; };
     const used = () => { const l = page.lastElementChild; return l ? l.offsetTop + l.offsetHeight : 0; };
     const blocks = Array.from(doc.children);
-    newPage({ i: 0, off: 0 });
+    newPage({ i: 0, off: 0, kind: 'block' });
     const place = (el, i, off, depth) => {
       if (depth > 400) return;
       el._src = i; el._off = off;
-      if ((forceNew || (el.dataset && el.dataset.pbb && !el.dataset.cont)) && page.childElementCount) newPage({ i, off });
+      const startOf = (e) => Object.assign({ i: e._src, off: e._off }, e.dataset.cont && e._start ? e._start : { kind: 'block' });
+      if ((forceNew || (el.dataset && el.dataset.pbb && !el.dataset.cont)) && page.childElementCount) newPage(startOf(el));
       forceNew = false;
       page.appendChild(el);
       if (el.tagName === 'P') { const pb = el.querySelector('.pgb'); if (pb) {
         const rg = document.createRange(); rg.setStartAfter(pb); rg.setEnd(el, el.childNodes.length); const rest = el.cloneNode(false); rest.appendChild(rg.extractContents()); pb.remove(); rest.dataset.cont = '1'; rest.style.paddingTop = '0px'; rest.style.textIndent = '0px';
+        rest._coff = (el._coff || 0) + countChars(el); rest._pgbBase = (el._pgbBase || 0) + 1; rest._start = { kind: 'pgb', j: el._pgbBase || 0 };
         const restEmpty = !rest.textContent.replace(/​/g, '').length && !rest.querySelector('img,.atom:not(.atomh)');
         if (!el.textContent.replace(/​/g, '').length && !el.querySelector('img,.atom:not(.atomh)') && page.childElementCount > 1) page.removeChild(el);
         if (restEmpty) { forceNew = true; return; }
-        newPage({ i, off: off + 1 }); place(rest, i, off + 1, depth + 1); return; } }
+        rest._src = i; newPage(Object.assign({ i, off: off + 1 }, rest._start)); place(rest, i, off + 1, depth + 1); return; } }
       const bottom = el.offsetTop + el.offsetHeight;
       if (bottom <= ch + 0.5) return;
       const textBottom = el.offsetTop + el.offsetHeight - (parseFloat(el.style.paddingBottom) || 0);
       if (el.tagName === 'P' && textBottom <= ch + 0.5) return; /* only the space after the paragraph runs over */
-      if (el.tagName === 'P') { const rest = splitPara(el, ch, pageTop); if (rest === 'fits') return; if (rest) { const h1 = el.offsetHeight; newPage({ i, off: off + h1 }); place(rest, i, off + h1, depth + 1); return; } }
-      if (el.tagName === 'TABLE') { const rest = splitTable(el, ch, pageTop); if (rest === 'fits') return; if (rest) { const h1 = el.offsetHeight; newPage({ i, off: off + h1 }); place(rest, i, off + h1, depth + 1); return; } }
+      if (el.tagName === 'P') { const rest = splitPara(el, ch, pageTop); if (rest === 'fits') return; if (rest) { const h1 = el.offsetHeight; newPage(Object.assign({ i, off: off + h1 }, rest._start)); place(rest, i, off + h1, depth + 1); return; } }
+      if (el.tagName === 'TABLE') { const rest = splitTable(el, ch, pageTop); if (rest === 'fits') return; if (rest) { const h1 = el.offsetHeight; newPage(Object.assign({ i, off: off + h1 }, rest._start)); place(rest, i, off + h1, depth + 1); return; } }
       if (page.childElementCount > 1) {
         page.removeChild(el); const moved = [];
         while (page.childElementCount > 1 && page.lastElementChild.dataset && page.lastElementChild.dataset.kn) { moved.unshift(page.lastElementChild); page.removeChild(page.lastElementChild); }
-        const first = moved[0] || el; newPage({ i: first._src, off: first._off });
+        const first = moved[0] || el; newPage(startOf(first));
         for (const m of moved) page.appendChild(m);
         place(el, i, off, depth + 1);
       }
     };
-    blocks.forEach((b, i) => place(b.cloneNode(true), i, 0, 0));
+    blocks.forEach((b, i) => { const c = b.cloneNode(true); stripGaps(c); if (c.tagName === 'TABLE') c._rmap = Array.from(c.querySelectorAll(':scope > tbody > tr')).map((_, r) => r); place(c, i, 0, 0); });
     P.list = pages; P.starts = starts; P.total = pages.length;
     return pages;
   };
-  /* dashed lines in the editor where each page starts */
-  P.marks = function () {
-    const box = $('marks'); let h = ''; const top = doc.offsetTop;
-    for (let k = 1; k < P.starts.length; k++) { const s = P.starts[k]; const b = doc.children[s.i]; if (!b) continue; const y = top + b.offsetTop + s.off; h += '<div class="pgmark" style="top:' + Math.round(y) + 'px"><span>Page ' + (k + 1) + '</span></div>'; }
-    box.innerHTML = h;
+  /* ---------- page view in the editor: separate sheets of paper ----------
+     The text stays one editable flow. Before each page start we add space (a margin, an
+     empty line-wide span inside a paragraph, or an empty table row) so that page k's
+     content begins at the top margin of sheet k. These spacers are never saved. */
+  const GAP = 28;
+  function stripGaps(root) {
+    const els = [root].concat(Array.from(root.querySelectorAll('[data-pgap]')));
+    for (const e of els) if (e.dataset && e.dataset.pgap != null) { e.style.marginTop = e.dataset.pgap; if (!e.getAttribute('style')) e.removeAttribute('style'); delete e.dataset.pgap; }
+    for (const g of root.querySelectorAll('.pgap')) { const par = g.parentNode; g.remove(); if (par) par.normalize(); }
+    for (const r of root.querySelectorAll('tr.pgaprow')) r.remove();
+  }
+  P.stripGaps = stripGaps;
+  P.clearGaps = () => stripGaps(doc);
+  P.applyGaps = function () {
+    const page = $('page'), sc = $('scroller'), keep = sc.scrollTop; const s = ED.doc.sect, H = px(s.h), mt = px(s.mt);
+    P.clearGaps();
+    const starts = P.starts || [];
+    const z = page.getBoundingClientRect().width / (page.offsetWidth || 1) || 1;
+    const yOf = (el) => (el.getBoundingClientRect().top - page.getBoundingClientRect().top) / z;
+    for (let k = 1; k < starts.length; k++) {
+      const st = starts[k], b = doc.children[st.i]; if (!b) continue;
+      const target = k * (H + GAP) + mt;
+      try {
+        if (st.kind === 'char' || st.kind === 'pgb') {
+          const g = document.createElement('span'); g.className = 'pgap'; g.contentEditable = 'false';
+          if (st.kind === 'pgb') { const pb = b.querySelectorAll('.pgb')[st.j]; if (!pb) continue; pb.after(g); }
+          else { const loc = locateChar(b, st.c); if (!loc) continue; const r = document.createRange(); r.setStart(loc[0], loc[1]); r.collapse(true); r.insertNode(g); }
+          g.style.height = Math.max(0, target - yOf(g)) + 'px';
+        } else if (st.kind === 'row') {
+          const rows = Array.from(b.querySelectorAll(':scope > tbody > tr')); const row = rows[st.r]; if (!row) continue;
+          const cols = b.querySelectorAll(':scope > colgroup > col').length || Array.from(row.cells).reduce((a, c) => a + (c.colSpan || 1), 0) || 1;
+          const tr = document.createElement('tr'); tr.className = 'pgaprow'; tr.contentEditable = 'false'; const td = document.createElement('td'); td.colSpan = cols; tr.appendChild(td); row.before(tr);
+          const y = yOf(tr); td.style.height = Math.max(0, target - y) + 'px';
+          const err = target - yOf(row); if (Math.abs(err) > 0.5) td.style.height = Math.max(0, parseFloat(td.style.height) + err) + 'px';
+        } else {
+          for (let pass = 0; pass < 2; pass++) {
+            const d = target - yOf(b); if (Math.abs(d) < 0.5 || (d < 0 && b.dataset.pgap == null)) break;
+            if (b.dataset.pgap == null) b.dataset.pgap = b.style.marginTop || '';
+            const cur = parseFloat(getComputedStyle(b).marginTop) || 0; b.style.marginTop = Math.max(0, cur + d) + 'px';
+          }
+        }
+      } catch (e) { console.warn('page gap', e); }
+    }
+    drawSheets(Math.max(1, starts.length));
+    sc.scrollTop = keep;
   };
-  let pt = 0;
-  ED.schedulePages = function () { clearTimeout(pt); pt = setTimeout(() => { try { P.layout(); P.marks(); ED.status(); } catch (e) { console.warn('page layout failed', e); } }, 700); };
+  function drawSheets(n) {
+    const s = ED.doc.sect, W = px(s.w), H = px(s.h), cw = px(s.w - s.ml - s.mr); let h = '';
+    for (let k = 0; k < n; k++) {
+      h += '<div class="sheet" style="top:' + (k * (H + GAP)) + 'px;height:' + H + 'px;width:' + W + 'px">' +
+        '<div class="shf doc" style="left:' + px(s.ml) + 'px;top:' + px(s.hd) + 'px;width:' + cw + 'px;max-height:' + Math.max(0, px(s.mt - s.hd)) + 'px">' + hfHtml('h', k + 1, n) + '</div>' +
+        '<div class="shf doc" style="left:' + px(s.ml) + 'px;bottom:' + px(s.ft) + 'px;width:' + cw + 'px;max-height:' + Math.max(0, px(s.mb - s.ft)) + 'px">' + hfHtml('f', k + 1, n) + '</div></div>';
+    }
+    $('sheets').innerHTML = h;
+    $('page').style.minHeight = (n * H + (n - 1) * GAP) + 'px';
+  }
+  P.marks = P.applyGaps;
+  let pt = 0, composing = false;
+  doc.addEventListener('compositionstart', () => { composing = true; });
+  doc.addEventListener('compositionend', () => { composing = false; ED.schedulePages(); });
+  const run = () => { pt = 0; if (composing) { ED.schedulePages(); return; } try { P.layout(); P.applyGaps(); ED.status(); } catch (e) { console.warn('page layout failed', e); } };
+  /* at most one page layout every 450ms while typing, so the sheets keep up */
+  ED.schedulePages = function () { if (!pt) pt = setTimeout(run, 450); };
+  /* Backspace / Delete next to a page gap act on the text, not on the invisible gap */
+  doc.addEventListener('keydown', (e) => {
+    if (e.key !== 'Backspace' && e.key !== 'Delete') return; const s = getSelection(); if (!s.rangeCount || !s.isCollapsed) return;
+    const r = s.getRangeAt(0), n = r.startContainer, o = r.startOffset; const isGap = (x) => x && x.nodeType === 1 && x.classList.contains('pgap');
+    let x;
+    if (e.key === 'Backspace') { x = n.nodeType === 3 ? (o === 0 ? n.previousSibling : null) : n.childNodes[o - 1]; if (isGap(x)) { r.setStartBefore(x); r.collapse(true); s.removeAllRanges(); s.addRange(r); } }
+    else { x = n.nodeType === 3 ? (o === n.nodeValue.length ? n.nextSibling : null) : n.childNodes[o]; if (isGap(x)) { r.setStartAfter(x); r.collapse(true); s.removeAllRanges(); s.addRange(r); } }
+  }, true);
   ED.status = function () { const words = (doc.innerText.match(/[^\s​]+/g) || []).length; $('status').innerHTML = '<span>Page count: ' + P.total + '</span><span>Words: ' + words.toLocaleString('en-US') + '</span>'; };
 
   /* ---------- printed pages ---------- */
@@ -1714,11 +1791,11 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
     V.pages = 'all'; V.cur = 0; V.zoom = 0;
     const v = $('printview');
     v.innerHTML = '<div class="ptitle"><div style="font-weight:700;font-size:15px">Eddy Doc</div><div class="grow">' + esc(ED.doc.name) + ' · Print preview</div><button type="button" class="tb ghost" id="pp-back">Back to document</button></div>' +
-      '<div class="pbody"><div class="popts"><h2>Print</h2>' +
+      '<div class="pmain"><div class="popts"><h2>Print</h2>' +
       '<div class="note">Paper: <b id="pp-size"></b></div><button type="button" class="btn" id="pp-setup">Page setup…</button>' +
       '<label class="f">Pages<select id="pp-pages"><option value="all">All pages</option><option value="some">Only some pages</option></select></label>' +
       '<input type="text" id="pp-range" class="hide" placeholder="For example 1-3, 5" aria-label="Pages to print"><div class="note" id="pp-pageinfo" role="status"></div>' +
-      '<div style="flex:1"></div><div class="pfoot"><div class="note">The next step opens your computer\'s print dialog, where you choose the printer and the number of copies. To make a PDF, choose "Save as PDF" as the printer there.</div><button type="button" class="bigbtn" id="pp-go">Print</button></div></div>' +
+      '<div style="flex:1"></div><div class="pfoot"><div class="note">The next step opens your computer\'s print dialog, where you choose the printer and the number of copies. To make a PDF, choose "Save as PDF" as the printer there.</div><div class="note"><b>Tip:</b> if the date, file name or web address print at the top and bottom of the page, open <b>More settings</b> in that dialog and untick <b>Headers and footers</b>. The browser remembers this.</div><button type="button" class="bigbtn" id="pp-go">Print</button></div></div>' +
       '<div class="pstage"><div class="pscroll"><div id="pg-holder"></div></div><div class="pnav"><button type="button" id="pp-prev">Previous page</button><b id="pp-count"></b><button type="button" id="pp-next">Next page</button><button type="button" id="pp-zin">Zoom in</button><button type="button" id="pp-zout">Zoom out</button><button type="button" id="pp-zfit">Fit page</button></div></div></div>';
     v.classList.remove('hide');
     const rg = v.querySelector('#pp-range');
@@ -1819,7 +1896,7 @@ ED.lineFactor = function (font) { const f = String(font || '').toLowerCase(); if
   ED.linked = () => !!EddyLink.handle && /\.(docx|docm)$/i.test(EddyLink.name());
   ED.save = async function (copy) {
     try {
-      const bytes = await ED.saveDocx(); let name = ED.doc.name; if (!/\.(docx|docm)$/i.test(name)) name += '.docx';
+      let bytes; ED.pages.clearGaps(); try { bytes = await ED.saveDocx(); } finally { ED.pages.applyGaps(); } let name = ED.doc.name; if (!/\.(docx|docm)$/i.test(name)) name += '.docx';
       if (copy !== true && ED.linked()) {
         if (await EddyLink.writeBack(bytes)) { ED.dirty = false; ED.syncTitle(); ED.toast('Saved your changes to ' + EddyLink.name() + '.'); return; }
         ED.doc.name = name; ED.download(bytes, name, /\.docm$/i.test(name) ? 'application/vnd.ms-word.document.macroEnabled.12' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'); ED.dirty = false; ED.syncTitle(); ED.toast(EddyLink.failText(), 9000); return;
