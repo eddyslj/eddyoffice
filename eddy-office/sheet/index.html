@@ -156,6 +156,8 @@ select.b{padding:0 4px;max-width:150px}
 .parea{position:absolute;border:2px dashed #3b6fb6;pointer-events:none}
 /*__PRINTCSS__*/
 
+.pbrk{position:absolute;pointer-events:none;z-index:3}.pbrk.v{width:0;border-left:1px dashed #5a5f66}.pbrk.h{height:0;border-top:1px dashed #5a5f66}
+
 </style>
 </head>
 <body>
@@ -2451,6 +2453,13 @@ ES.sheetToRows = function (sh) { const d = ES.dims(sh); const out = []; for (let
     if (ES.clip && ES.clip.sheetId === sh.id && ES.clip.ants) { const g = ES.clip.g; html += '<div class="copyants" style="left:' + (X(g.c1) - 1) + 'px;top:' + (Y(g.r1) - 1) + 'px;width:' + (G.cl[Math.min(g.c2, sh.nCols - 1) + 1] - G.cl[g.c1] + 1) + 'px;height:' + (G.rt[Math.min(g.r2, sh.nRows - 1) + 1] - G.rt[g.r1] + 1) + 'px"></div>'; }
     if (ES.edit.on && ES.edit.refBox && ES.edit.refBox.sheet === sh.id) { const g = ES.edit.refBox; html += '<div class="refbox" style="left:' + (X(g.c1) - 1) + 'px;top:' + (Y(g.r1) - 1) + 'px;width:' + (G.cl[g.c2 + 1] - G.cl[g.c1] + 1) + 'px;height:' + (G.rt[g.r2 + 1] - G.rt[g.r1] + 1) + 'px"></div>'; }
     for (const g of ES.printAreas(sh, true)) { if (g.r1 >= sh.nRows || g.c1 >= sh.nCols) continue; const r2c = Math.min(g.r2, sh.nRows - 1), c2c = Math.min(g.c2, sh.nCols - 1); html += '<div class="parea" style="left:' + (X(g.c1) - 1) + 'px;top:' + (Y(g.r1) - 1) + 'px;width:' + (G.cl[c2c + 1] - G.cl[g.c1] + 1) + 'px;height:' + (G.rt[r2c + 1] - G.rt[g.r1] + 1) + 'px"></div>'; }
+    /* dashed lines where printed pages begin and end */
+    if (ES.showBreaks && ES.print && ES.print.breaks) for (const b of ES.print.breaks(sh)) {
+      const g = b.g; if (g.r1 >= sh.nRows || g.c1 >= sh.nCols) continue; const r2c = Math.min(g.r2, sh.nRows - 1), c2c = Math.min(g.c2, sh.nCols - 1);
+      const top = Y(g.r1), bot = Y(r2c + 1), left = X(g.c1), right = X(c2c + 1);
+      for (const c of b.colStarts.concat([c2c + 1])) if (c <= sh.nCols) html += '<div class="pbrk v" style="left:' + (X(c) - 1) + 'px;top:' + top + 'px;height:' + (bot - top) + 'px"></div>';
+      for (const r of b.rowStarts.concat([r2c + 1])) if (r <= sh.nRows) html += '<div class="pbrk h" style="left:' + left + 'px;top:' + (Y(r) - 1) + 'px;width:' + (right - left) + 'px"></div>';
+    }
     if (ES.fillPreview) { const g = ES.fillPreview; html += '<div class="copyants" style="left:' + (X(g.c1) - 1) + 'px;top:' + (Y(g.r1) - 1) + 'px;width:' + (G.cl[g.c2 + 1] - G.cl[g.c1] + 1) + 'px;height:' + (G.rt[g.r2 + 1] - G.rt[g.r1] + 1) + 'px"></div>'; }
     return html;
   }
@@ -2961,6 +2970,7 @@ ES.sheetToRows = function (sh) { const d = ES.dims(sh); const out = []; for (let
     if (cur.length) items.push({ label: 'Add ' + ref + ' to the print area', disabled: single, fn: () => { ES.setPrintArea(sh, cur.concat([g])); done(); ES.toast('Added ' + ref + '. Each part prints on its own page.'); } });
     items.push({ label: 'Clear print area', disabled: !cur.length, fn: () => { ES.setPrintArea(sh, []); done(); ES.toast('Print area cleared. The whole sheet will print.'); } });
     if (single) items.push('-', { title: 'Select the cells you want to print first.' });
+    items.push('-', { label: (ES.showBreaks ? '✓ ' : '') + 'Show page break lines', fn: () => { ES.showBreaks = !ES.showBreaks; try { localStorage.setItem('eddysheet.breaks', ES.showBreaks ? '1' : '0'); } catch (e) { /* ignore */ } ES.requestRender(); } });
     ES.menuAt($('t-parea'), items);
   });
 
@@ -3054,11 +3064,12 @@ ES.sheetToRows = function (sh) { const d = ES.dims(sh); const out = []; for (let
   const meas = document.createElement('canvas').getContext('2d');
 
   function pageSize(o) { const p = PAPER[o.paper] || PAPER.A4; return o.orient === 'landscape' ? [p[1], p[0]] : [p[0], p[1]]; }
-  function sheetPages(sh, range, o, ctx) {
+  /* how a range is split into pages: groups of columns and rows */
+  function layout(sh, range, o, ctx) {
     const cw = (c) => sh.hiddenCols.has(c) ? 0 : (sh.colW[c] == null ? sh.defCol : sh.colW[c]);
     const rh = (r) => (sh.hiddenRows.has(r) || sh.filterHidden.has(r)) ? 0 : (sh.rowH[r] == null ? sh.defRow : sh.rowH[r]);
     const cols = [], rows = []; for (let c = range.c1; c <= range.c2; c++) if (cw(c) > 0) cols.push(c); for (let r = range.r1; r <= range.r2; r++) if (rh(r) > 0) rows.push(r);
-    if (!cols.length || !rows.length) return [];
+    if (!cols.length || !rows.length) return null;
     const [W, H] = pageSize(o), mg = MARG[o.margin] || MARG.Normal;
     const pw = (W - 2 * mg[1]) * MM, ph = (H - 2 * mg[0]) * MM - (o.pagenum ? 16 : 0);
     const hdW = o.headings ? 42 : 0, hdH = o.headings ? 20 : 0;
@@ -3075,6 +3086,12 @@ ES.sheetToRows = function (sh) { const d = ES.dims(sh); const out = []; for (let
     const rowGroups = []; cur = []; acc = 0; const avail = ph - (headH + hdH) * scale;
     for (const r of bodyRows) { const h = rh(r) * scale; if (cur.length && acc + h > avail + 0.5) { rowGroups.push(cur); cur = []; acc = 0; } cur.push(r); acc += h; } if (cur.length) rowGroups.push(cur);
     if (!rowGroups.length) rowGroups.push([]);
+    return { cw, rh, cols, rows, W, H, mg, pw, ph, hdW, hdH, scale, headRows, headH, colGroups, rowGroups };
+  }
+  P.layout = layout;
+  function sheetPages(sh, range, o, ctx) {
+    const L = layout(sh, range, o, ctx); if (!L) return [];
+    const { cw, rh, pw, ph, hdW, hdH, scale, headRows, colGroups, rowGroups } = L;
     const mergeAt = new Map(); for (const m of sh.merges) for (let r = m.r1; r <= m.r2; r++) for (let c = m.c1; c <= m.c2; c++) mergeAt.set(r * 16384 + c, m);
     const out = [];
     for (const cg of colGroups) for (let gi = 0; gi < rowGroups.length; gi++) {
@@ -3119,6 +3136,22 @@ ES.sheetToRows = function (sh) { const d = ES.dims(sh); const out = []; for (let
     }
     return out;
   }
+  /* where pages start on a sheet, for the dashed page-break lines on the grid */
+  let bcache = { t: 0, key: '', v: null };
+  ES.showBreaks = true; try { ES.showBreaks = localStorage.getItem('eddysheet.breaks') !== '0'; } catch (e) { /* ignore */ }
+  P.breaks = function (sh) {
+    const o = Object.assign({}, P.opts, { what: 'sheet' }); const key = sh.id + '|' + o.paper + o.orient + o.scale + o.margin + o.repeat + o.headings + o.pagenum + (sh.printArea || []).join(',');
+    const now = Date.now(); if (bcache.v && bcache.key === key && now - bcache.t < 600) return bcache.v;
+    const out = [];
+    const usedOf = () => { const u = ES.usedRange(sh, true); const e = ES.pics ? ES.pics.extent(sh) : { rows: 0, cols: 0 }; const rows = Math.max(u.rows, e.rows), cols = Math.max(u.cols, e.cols); return (rows && cols) ? { r1: 0, c1: 0, r2: rows - 1, c2: cols - 1 } : null; };
+    const areas = ES.printAreas(sh); const list = areas.length ? areas.map((g) => [g, { area: true }]) : (usedOf() ? [[usedOf(), {}]] : []);
+    for (const [g, ctx] of list) {
+      const L = layout(sh, g, o, ctx); if (!L) continue;
+      const colStarts = L.colGroups.slice(1).map((cg) => cg[0]); const rowStarts = L.rowGroups.slice(1).filter((rg) => rg.length).map((rg) => rg[0]);
+      out.push({ g, colStarts, rowStarts });
+    }
+    bcache = { t: now, key, v: out }; return out;
+  };
   P.build = function () {
     const o = P.opts, [W, H] = pageSize(o), mg = MARG[o.margin] || MARG.Normal; let parts = [];
     const cur = ES.sheet();
@@ -3226,7 +3259,7 @@ ES.sheetToRows = function (sh) { const d = ES.dims(sh); const out = []; for (let
     v.onkeydown = (e) => { if (e.key === 'Escape') P.close(); else if (e.key === 'PageDown' || e.key === 'ArrowRight') v.querySelector('#pp-next').click(); else if (e.key === 'PageUp' || e.key === 'ArrowLeft') v.querySelector('#pp-prev').click(); };
     P.build(); show(); v.querySelector('#pp-go').focus();
   };
-  P.close = function () { $('printview').classList.add('hide'); $('printview').innerHTML = ''; ES.focusGrid(); };
+  P.close = function () { $('printview').classList.add('hide'); $('printview').innerHTML = ''; ES.focusGrid(); ES.requestRender(); };
 })();
 
 /* Eddy Sheet — charts: draw, edit, read from and write into .xlsx */
