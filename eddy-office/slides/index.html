@@ -177,6 +177,7 @@ select.b{padding:0 4px;max-width:160px}
     <button type="button" class="tb ghost" id="btn-open">Open file</button>
     <button type="button" class="tb ghost" id="btn-save">Save as .pptx</button>
     <button type="button" class="tb ghost hide" id="btn-copy" title="Download a copy and leave the original file as it is">Save a copy</button>
+    <button type="button" class="tb ghost" id="btn-share" title="Send this file with WhatsApp, Mail, AirDrop and other apps">Share</button>
     <button type="button" class="tb ghost" id="btn-present" title="Present from the first slide (F5)">Present</button>
     <button type="button" class="tb ghost" id="btn-present-here" title="Present from this slide (Shift+F5)">From this slide</button>
     <button type="button" class="tb solid" id="btn-print">Print</button>
@@ -329,6 +330,31 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } catch (e) { console.error(e); L.lastError = e; return false; }
   };
 
+  /* the phone or computer's share sheet (WhatsApp, Mail, AirDrop, ...); falls back to a download */
+  L.share = async function (makeBytes, name, mime) {
+    const o = L.o || {}; const say = (t, ms) => (o.toast ? o.toast(t, ms) : null);
+    let file;
+    try { const bytes = await makeBytes(); file = new File([bytes], name, { type: mime }); }
+    catch (e) { console.error(e); say('The file could not be prepared: ' + (e && e.message ? e.message : e), 8000); return; }
+    const can = navigator.canShare && navigator.share && navigator.canShare({ files: [file] });
+    if (!can) { L.download(file); say('This browser cannot open the share menu, so ' + name + ' was saved to your downloads folder instead.', 6000); return; }
+    try { await navigator.share({ files: [file], title: name }); }
+    catch (e) {
+      if (e && e.name === 'AbortError') return;
+      if (e && e.name === 'NotAllowedError') { L.shareReady(file); return; }
+      console.error(e); L.download(file); say('Sharing did not work, so ' + name + ' was saved to your downloads folder instead.', 6000);
+    }
+  };
+  /* some phones need a fresh tap once the file is ready */
+  L.shareReady = function (file) {
+    const d = document.createElement('div'); d.className = 'eddy-share-ready';
+    d.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;padding:16px';
+    d.innerHTML = '<div style="background:#fff;color:#1f2933;border-radius:14px;padding:18px;max-width:380px;width:100%;font:15px system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.3)"><div style="font-weight:700;font-size:17px;margin-bottom:6px">Ready to share</div><div style="margin-bottom:14px;word-break:break-word"></div><div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" data-a="no" style="min-height:44px;padding:0 16px;border-radius:10px;border:1px solid #ccd;background:#fff;font:inherit">Cancel</button><button type="button" data-a="go" style="min-height:44px;padding:0 18px;border-radius:10px;border:0;background:#2b579a;color:#fff;font:inherit;font-weight:700">Share</button></div></div>';
+    d.querySelector('div > div:nth-child(2)').textContent = file.name;
+    document.body.appendChild(d);
+    d.addEventListener('click', async (e) => { const a = e.target.dataset && e.target.dataset.a; if (!a) return; d.remove(); if (a === 'go') { try { await navigator.share({ files: [file], title: file.name }); } catch (er) { if (er.name !== 'AbortError') L.download(file); } } });
+  };
+  L.download = function (file) { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); };
   L.failText = function () {
     if (L.lastError === 'permission') return 'Eddy was not allowed to change the original file, so a copy was saved to your downloads folder instead.';
     return 'The original file could not be changed (it may be open in another program), so a copy was saved to your downloads folder instead.';
@@ -2371,6 +2397,7 @@ EP.closeDialog = function () { $('dialog').classList.add('hide'); $('dialog').in
   $('btn-new').addEventListener('click', async () => { if (EP.dirty && !window.confirm('You have unsaved changes. Start a new presentation and lose them?')) return; EddyLink.handle = null; EP.base = []; await EP.newDeck(); afterLoad(); });
   $('btn-save').addEventListener('click', () => EP.save());
   $('btn-copy').addEventListener('click', () => EP.save(true));
+  $('btn-share').addEventListener('click', () => { let name = EP.deck.name; if (!/\.(pptx|pptm|ppsx|potx)$/i.test(name)) name += '.pptx'; EddyLink.share(() => EP.savePptx(), name, MIMES[(name.split('.').pop() || '').toLowerCase()] || 'application/vnd.openxmlformats-officedocument.presentationml.presentation'); });
   $('btn-present').addEventListener('click', () => EP.present(false));
   $('btn-present-here').addEventListener('click', () => EP.present(true));
   $('btn-print').addEventListener('click', () => EP.printOpen());
