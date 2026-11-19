@@ -1,6 +1,6 @@
 /* Offline helper: keeps a copy of the app so it opens without internet.
    When online it always fetches the newest version first. */
-const CACHE = 'scan-b7c92022c9';
+const CACHE = 'scan-f87134fd24';
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

@@ -217,7 +217,128 @@ function loadImg(blob) { return new Promise((res, rej) => { const u = URL.create
 const toBlob = (c, type, q) => new Promise((res) => c.toBlob(res, type, q));
 function canvasOf(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
 /* find the page: the largest bright area, and its four corners (in 0..1 coordinates) */
-function detectQuad(src, sw, sh) {
+/* find the page from its straight edges: the four lines that make the most paper-like four-sided shape.
+   A corner hidden under something else is found where its two edges meet. */
+function detectQuad(src, sw, sh, fast) {
+  const W = fast ? 220 : 300, H = Math.max(60, Math.round(W * sh / sw)), N = W * H;
+  const cv = canvasOf(W, H), cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(src, 0, 0, W, H);
+  const d = cx.getImageData(0, 0, W, H).data;
+  const g = new Float32Array(N), wt = new Float32Array(N);
+  for (let i = 0, j = 0; i < N; i++, j += 4) { const r = d[j], gg = d[j + 1], b = d[j + 2]; const mn = Math.min(r, gg, b), mx = Math.max(r, gg, b); g[i] = 0.3 * r + 0.59 * gg + 0.11 * b; wt[i] = mn - 0.6 * (mx - mn); }
+  /* wipe out print (thin dark marks) so only the paper's outline is left: brightest-nearby, then darkest-nearby */
+  const base = new Float32Array(N); for (let i = 0; i < N; i++) base[i] = g[i] + wt[i] * 0.5;
+  const R = 3, tmp = new Float32Array(N), cl = new Float32Array(N);
+  const pass = (src, dst, horiz, useMax) => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let m = useMax ? -1e9 : 1e9; for (let k = -R; k <= R; k++) { const xx = horiz ? clamp(x + k, 0, W - 1) : x, yy = horiz ? y : clamp(y + k, 0, H - 1); const v = src[yy * W + xx]; m = useMax ? (v > m ? v : m) : (v < m ? v : m); } dst[y * W + x] = m; } };
+  pass(base, tmp, true, true); pass(tmp, cl, false, true); pass(cl, tmp, true, false); pass(tmp, cl, false, false);
+  for (let i = 0; i < N; i++) wt[i] = Math.min(wt[i] + 0, wt[i]); /* keep whiteness for judging */
+  const wtc = new Float32Array(N); pass(wt, tmp, true, true); pass(tmp, wtc, false, true); pass(wtc, tmp, true, false); pass(tmp, wtc, false, false); wt.set(wtc);
+  const bl = new Float32Array(N);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { let s2 = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) s2 += cl[(y + dy) * W + x + dx]; bl[y * W + x] = s2 / 9; }
+  const mag = new Float32Array(N), ang = new Float32Array(N); const hist = new Uint32Array(256);
+  for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+    const i = y * W + x; const gx = bl[i - W + 1] + 2 * bl[i + 1] + bl[i + W + 1] - bl[i - W - 1] - 2 * bl[i - 1] - bl[i + W - 1];
+    const gy = bl[i + W - 1] + 2 * bl[i + W] + bl[i + W + 1] - bl[i - W - 1] - 2 * bl[i - W] - bl[i - W + 1];
+    const m = Math.hypot(gx, gy); mag[i] = m; ang[i] = Math.atan2(gy, gx); hist[Math.min(255, m / 4 | 0)]++;
+  }
+  let acc = 0, T = 40; for (let k = 255; k >= 0; k--) { acc += hist[k]; if (acc > N * 0.07) { T = Math.max(40, k * 4); break; } }
+  /* straight lines (Hough): each edge point votes only near its own direction */
+  const NT = 180, D = Math.ceil(Math.hypot(W, H)), NR = 2 * D + 1; const hv = new Float32Array(NT * NR);
+  const cs = new Float32Array(NT), sn = new Float32Array(NT); for (let t = 0; t < NT; t++) { cs[t] = Math.cos(t * Math.PI / NT); sn[t] = Math.sin(t * Math.PI / NT); }
+  for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+    const i = y * W + x; if (mag[i] < T) continue; let a0 = ang[i]; if (a0 < 0) a0 += Math.PI; const t0 = Math.round(a0 * NT / Math.PI);
+    const wv = Math.min(2, mag[i] / T);
+    for (let dt = -5; dt <= 5; dt++) { const t = (t0 + dt + NT) % NT; const r = Math.round(x * cs[t] + y * sn[t]) + D; hv[t * NR + r] += wv; }
+  }
+  const minV = Math.min(W, H) * 0.18; const peaks = [];
+  for (let t = 0; t < NT; t++) for (let r = 1; r < NR - 1; r++) { const v = hv[t * NR + r]; if (v < minV) continue; if (v >= hv[t * NR + r - 1] && v >= hv[t * NR + r + 1]) peaks.push([v, t, r - D]); }
+  peaks.sort((a, b) => b[0] - a[0]);
+  const lines = [];
+  for (const [v, t, r] of peaks) {
+    if (lines.length >= (fast ? 20 : 26)) break;
+    if (lines.some((l) => { let dt = Math.abs(l.t - t); let dr = Math.abs(l.r - r); if (dt > NT / 2) { dt = NT - dt; dr = Math.abs(l.r + r); } return dt < 5 && dr < 7; })) continue;
+    lines.push({ v, t, r, th: t * Math.PI / NT });
+  }
+  if (lines.length < 3) return detectQuadMask(src, sw, sh);
+  /* helpers to judge a candidate shape */
+  const inter = (a, b) => { const det = Math.cos(a.th) * Math.sin(b.th) - Math.sin(a.th) * Math.cos(b.th); if (Math.abs(det) < 1e-6) return null; return [(a.r * Math.sin(b.th) - b.r * Math.sin(a.th)) / det, (b.r * Math.cos(a.th) - a.r * Math.cos(b.th)) / det]; };
+  const at = (arr, x, y) => { x = clamp(Math.round(x), 0, W - 1); y = clamp(Math.round(y), 0, H - 1); return arr[y * W + x]; };
+  /* edge map widened by 2 px, so checking a point is a single look-up */
+  const em = new Uint8Array(N), em2 = new Uint8Array(N); const TT = T * 0.6;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let on2 = 0; for (let k = -2; k <= 2 && !on2; k++) { const xx = x + k; if (xx >= 0 && xx < W && mag[y * W + xx] >= TT) on2 = 1; } em2[y * W + x] = on2; }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let on2 = 0; for (let k = -2; k <= 2 && !on2; k++) { const yy = y + k; if (yy >= 0 && yy < H && em2[yy * W + x]) on2 = 1; } em[y * W + x] = on2; }
+  const edgeNear = (x, y) => at(em, x, y) ? TT : 0;
+  const inFrame = (p) => p[0] >= -0.02 * W && p[0] <= 1.02 * W && p[1] >= -0.02 * H && p[1] <= 1.02 * H;
+  const nearFrame = (p) => p[0] >= -0.12 * W && p[0] <= 1.12 * W && p[1] >= -0.12 * H && p[1] <= 1.12 * H;
+  function judge(Q) {
+    let area = 0; for (let i = 0; i < 4; i++) { const p = Q[i], q = Q[(i + 1) % 4]; area += p[0] * q[1] - q[0] * p[1]; } area = Math.abs(area) / 2;
+    if (area < N * 0.1) return -1;
+    let sgn = 0; for (let i = 0; i < 4; i++) { const a = Q[i], b = Q[(i + 1) % 4], c = Q[(i + 2) % 4]; const cr = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]); const s2 = Math.sign(cr); if (!sgn) sgn = s2; else if (s2 !== sgn) return -1; }
+    const cxm = (Q[0][0] + Q[1][0] + Q[2][0] + Q[3][0]) / 4, cym = (Q[0][1] + Q[1][1] + Q[2][1] + Q[3][1]) / 4;
+    const sup = [], con = [];
+    for (let i = 0; i < 4; i++) {
+      const a = Q[i], b = Q[(i + 1) % 4]; const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < Math.min(W, H) * 0.12) return -1;
+      let nx = -(b[1] - a[1]) / len, ny = (b[0] - a[0]) / len; const mx2 = (a[0] + b[0]) / 2, my2 = (a[1] + b[1]) / 2; if ((cxm - mx2) * nx + (cym - my2) * ny < 0) { nx = -nx; ny = -ny; }
+      let hit = 0, cnt = 0, cin = 0, cout = 0, cc = 0;
+      for (let k = 1; k < 30; k++) {
+        const x = a[0] + (b[0] - a[0]) * k / 30, y = a[1] + (b[1] - a[1]) * k / 30; if (x < 1 || y < 1 || x > W - 2 || y > H - 2) continue; cnt++;
+        /* a real paper edge: a step from light paper inside to something darker outside */
+        let wi = 0, wo = 0; for (const o of [3, 5]) { wi += at(wt, x + nx * o, y + ny * o); wo += at(wt, x - nx * o, y - ny * o); } wi /= 2; wo /= 2;
+        const outside = x - nx * 5 >= 0 && y - ny * 5 >= 0 && x - nx * 5 < W && y - ny * 5 < H;
+        if (edgeNear(x, y) >= T * 0.6 && (!outside || wi - wo > 10)) hit++;
+        if (outside) { cin += wi; cout += wo; cc++; }
+      }
+      sup.push(cnt > 6 ? hit / cnt : 0.35); con.push(cc > 4 ? (cin - cout) / cc / 255 : 0.12);
+    }
+    /* paper is light and even inside */
+    let wsum = 0, wsq = 0, ws = 0;
+    for (let u = 0.1; u < 0.95; u += 0.1) for (let v = 0.1; v < 0.95; v += 0.1) { const x = (1 - u) * (1 - v) * Q[0][0] + u * (1 - v) * Q[1][0] + u * v * Q[2][0] + (1 - u) * v * Q[3][0], y = (1 - u) * (1 - v) * Q[0][1] + u * (1 - v) * Q[1][1] + u * v * Q[2][1] + (1 - u) * v * Q[3][1]; const w2 = at(wt, x, y); wsum += w2; wsq += w2 * w2; ws++; }
+    const wIn = wsum / ws, wStd = Math.sqrt(Math.max(0, wsq / ws - wIn * wIn));
+    const L = (i) => Math.hypot(Q[(i + 1) % 4][0] - Q[i][0], Q[(i + 1) % 4][1] - Q[i][1]);
+    const s1 = (L(0) + L(2)) / 2, s2 = (L(1) + L(3)) / 2; const ratio = Math.max(s1, s2) / Math.min(s1, s2);
+    const aspect = ratio >= 1.22 && ratio <= 1.6 ? 1 : Math.max(0, 1 - Math.min(Math.abs(ratio - 1.22), Math.abs(ratio - 1.6)) * 2.5);
+    const off = Q.filter((p) => !inFrame(p)).length;
+    const sorted = sup.slice().sort((x, y) => x - y); const support = (sorted[1] + sorted[2] + sorted[3] + 0.5 * sorted[0]) / 3.5;
+    const contrast = con.reduce((x, y) => x + Math.max(-0.2, y), 0) / 4; const minCon = Math.min(...con);
+    if (minCon < -0.06) return -1;
+    judge.lastCon = contrast; judge.lastMin = sorted[0];
+    return 2.2 * support + 2.0 * clamp(contrast * 5, -1, 1) + 0.9 * clamp(wIn / 200, 0, 1) - 0.6 * clamp(wStd / 60, 0, 1) + 0.9 * aspect + 0.5 * (area / N) - 0.45 * off;
+  }
+  /* pairs of near-parallel lines, then two pairs that cross */
+  const pairs = [];
+  for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++) {
+    const a = lines[i], b = lines[j]; let dt = Math.abs(a.t - b.t); if (dt > NT / 2) dt = NT - dt; if (dt > 20) continue;
+    pairs.push([a, b]);
+  }
+  const cands = [];
+  for (let i = 0; i < pairs.length; i++) for (let j = i + 1; j < pairs.length; j++) {
+    const [a, b] = pairs[i], [c, e] = pairs[j]; if (a === c || a === e || b === c || b === e) continue;
+    let dt = Math.abs(a.t - c.t); if (dt > NT / 2) dt = NT - dt; if (dt < 55) continue;
+    const pts = [inter(a, c), inter(c, b), inter(b, e), inter(e, a)]; if (pts.some((p) => !p || !nearFrame(p))) continue;
+    const s2 = judge(pts); if (s2 > 0.9) cands.push({ s: s2, pts, con: judge.lastCon, minSup: judge.lastMin });
+  }
+  cands.sort((x, y) => y.s - x.s);
+  /* drop near-copies of the same shape */
+  const uniq = []; const tol = Math.min(W, H) * 0.05;
+  for (const c of cands) if (!uniq.some((u) => u.pts.every((p) => c.pts.some((q) => Math.hypot(p[0] - q[0], p[1] - q[1]) < tol)))) uniq.push(c);
+  cands.length = 0; cands.push(...uniq);
+  let best = cands.length ? cands[0].pts : null;
+  /* paper lying on a light table: prefer a good shape that sits inside the winner */
+  if (best) {
+    const inside = (P, Q) => P.every((p) => { let sg = 0; for (let i = 0; i < 4; i++) { const a = Q[i], b = Q[(i + 1) % 4]; const cr = Math.sign((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])); if (!sg) sg = cr; else if (cr && cr !== sg) return false; } return true; });
+    const areaOf = (Q) => { let a = 0; for (let i = 0; i < 4; i++) { const p = Q[i], q = Q[(i + 1) % 4]; a += p[0] * q[1] - q[0] * p[1]; } return Math.abs(a) / 2; };
+    let pick = null;
+    for (const c of cands.slice(1)) if (c.s > cands[0].s * 0.72 && c.con > 0.035 && c.minSup >= 0.8 && areaOf(c.pts) < areaOf(best) * 0.85 && inside(c.pts, best) && (!pick || c.minSup > pick.minSup + 0.02 || (Math.abs(c.minSup - pick.minSup) <= 0.02 && c.s > pick.s))) pick = c;
+    if (pick) best = pick.pts;
+  }
+  if (!best) return detectQuadMask(src, sw, sh);
+  /* order: top-left, top-right, bottom-right, bottom-left */
+  const cxm = best.reduce((x, p) => x + p[0], 0) / 4, cym = best.reduce((x, p) => x + p[1], 0) / 4;
+  const ord = best.slice().sort((p, q) => Math.atan2(p[1] - cym, p[0] - cxm) - Math.atan2(q[1] - cym, q[0] - cxm));
+  let k0 = 0; ord.forEach((p, k) => { if (p[0] + p[1] < ord[k0][0] + ord[k0][1]) k0 = k; });
+  const res = []; for (let k = 0; k < 4; k++) { const p = ord[(k0 + k) % 4]; res.push([clamp(p[0] / W, 0, 1), clamp(p[1] / H, 0, 1)]); }
+  return res;
+}
+function detectQuadMask(src, sw, sh) {
   const W = 220, H = Math.max(40, Math.round(W * sh / sw)); const c = canvasOf(W, H); const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(src, 0, 0, W, H);
   const d = x.getImageData(0, 0, W, H).data; const g = new Uint8Array(W * H); const hist = new Uint32Array(256);
   for (let i = 0, j = 0; i < g.length; i++, j += 4) { const v = (d[j] * 0.3 + d[j + 1] * 0.59 + d[j + 2] * 0.11) | 0; g[i] = v; hist[v]++; }
@@ -258,6 +379,8 @@ function straighten(img, quad, long) {
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
   const P = quad.map(([x, y]) => [x * iw, y * ih]); const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   let w = Math.max(dist(P[0], P[1]), dist(P[3], P[2])), h = Math.max(dist(P[0], P[3]), dist(P[1], P[2]));
+  /* a page that is nearly A4 or Letter shape becomes exactly that shape */
+  if (quad !== FULL) { const r = Math.max(w, h) / Math.min(w, h); const snap = r >= 1.24 && r < 1.48 ? Math.SQRT2 : r >= 1.48 && r <= 1.62 ? 330 / 215 : 0; /* A4, or F4 / folio */ if (snap) { if (h >= w) h = w * snap; else w = h * snap; } }
   const k = Math.min(1, long / Math.max(w, h)); w = Math.max(16, Math.round(w * k)); h = Math.max(16, Math.round(h * k));
   /* read the source at a size close to the output, so sampling stays sharp and fast */
   const sk = Math.min(1, (long * 1.15) / Math.max(dist(P[0], P[1]) || 1, dist(P[0], P[3]) || 1, 1) / 1);
@@ -473,7 +596,7 @@ function signature(v) { const c = signature.c || (signature.c = canvasOf(24, 32)
 const sigDiff = (a, b) => { if (!a || !b) return 255; let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
 function tick() {
   const v = $('video'); if (!v.videoWidth || C.shooting) return;
-  const q = detectQuad(v, v.videoWidth, v.videoHeight); const sig = signature(v);
+  const q = detectQuad(v, v.videoWidth, v.videoHeight, true); const sig = signature(v);
   const motion = sigDiff(sig, C.prevSig); C.prevSig = sig;
   const moved = !C.quad || !q || q.some((p, i) => Math.hypot(p[0] - C.quad[i][0], p[1] - C.quad[i][1]) > 0.025);
   C.quad = q; const now = performance.now();
