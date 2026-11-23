@@ -48,8 +48,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 #cam .vbox{position:relative;flex:1;overflow:hidden}
 #cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
 #cam canvas.ov{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-#cam .top{position:absolute;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;padding:calc(var(--st) + 8px) 12px 8px;background:linear-gradient(rgba(0,0,0,.55),transparent);z-index:2}
-#cam .top button{min-height:44px;border:0;background:rgba(0,0,0,.35);color:#fff;border-radius:22px;padding:0 16px;font-weight:600}
+#cam .top{position:absolute;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:calc(var(--st) + 8px) 12px 8px;background:linear-gradient(rgba(0,0,0,.55),transparent);z-index:2}
+#cam .top button{min-height:44px;border:0;background:rgba(0,0,0,.35);color:#fff;border-radius:22px;padding:0 13px;font-weight:600;font-size:15px}
 #cam .top .auto.on{background:#fff;color:#000}
 #cam .hint{position:absolute;left:50%;top:calc(var(--st) + 66px);transform:translateX(-50%);background:rgba(0,0,0,.55);padding:6px 14px;border-radius:16px;font-size:14px;white-space:nowrap;z-index:2}
 #cam .bottom{flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 22px calc(var(--sb) + 18px);background:#000}
@@ -110,7 +110,7 @@ button{font:inherit;color:inherit;cursor:pointer}
     <video id="video" playsinline muted autoplay></video>
     <canvas class="ov" id="ov"></canvas>
     <div class="flash" id="flash"></div>
-    <div class="top"><button id="c-cancel">Cancel</button><button id="c-auto" class="auto on" title="Take the picture by itself when the page is still">Auto</button></div>
+    <div class="top"><button id="c-cancel">Cancel</button><button id="c-q" title="Quality of the pages: tap to change">Standard</button><button id="c-photo" title="Use the iPhone camera for a full-resolution photo of one page">Photo</button><button id="c-auto" class="auto on" title="Take the picture by itself when the page is still">Auto</button></div>
     <div class="hint" id="c-hint">Point the camera at the page</div>
     <div class="err hide" id="c-err"></div>
   </div>
@@ -131,7 +131,7 @@ button{font:inherit;color:inherit;cursor:pointer}
       <button class="btn" id="e-photos">＋ Add photos</button>
     </div>
     <div class="row"><span id="e-info" class="note" style="margin:0;flex:1"></span>
-      <label class="note" style="margin:0">Quality <select id="e-quality" class="sel"><option value="small">Small</option><option value="std">Standard</option><option value="sharp">Sharp</option></select></label></div>
+      <label class="note" style="margin:0">Quality <select id="e-quality" class="sel"><option value="small">Small</option><option value="std">Standard</option><option value="sharp">Sharp</option><option value="best">Best</option></select></label></div>
     <div class="pages" id="e-pages"></div>
     <p class="note" style="margin-top:16px">Tap a page to straighten the edges, rotate, change its look, move it or delete it.</p>
     <div class="row" style="margin-top:20px"><button class="btn danger" id="e-delete">Delete this scan</button></div>
@@ -158,6 +158,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 <div id="toast" class="hide" role="status"></div>
 <div id="busy" class="hide"><div id="busy-t">Working…</div></div>
 <input type="file" id="f-photos" accept="image/*" multiple hidden>
+<input type="file" id="f-shot" accept="image/*" capture="environment" hidden>
 
 <script>
 'use strict';
@@ -166,7 +167,8 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 /* quality settings: longest side in pixels and JPEG quality. Standard is ~200 dpi on A4, easy to read */
-const Q = { small: { long: 1400, q: 0.5 }, std: { long: 1750, q: 0.58 }, sharp: { long: 2300, q: 0.7 } };
+const Q = { small: { long: 1400, q: 0.5, label: 'Small' }, std: { long: 1750, q: 0.58, label: 'Standard' }, sharp: { long: 2300, q: 0.7, label: 'Sharp' }, best: { long: 3300, q: 0.86, label: 'Best' } };
+const SRC_MAX = 4200; /* longest side kept from the camera, so Best has detail to use */
 const S = { docs: [], doc: null, srcs: {}, quality: 'std', filter: 'doc', auto: true };
 try { const p = JSON.parse(localStorage.getItem('eddyscan.prefs') || '{}'); if (Q[p.quality]) S.quality = p.quality; if (p.filter) S.filter = p.filter; if (p.auto === false) S.auto = false; } catch (e) { /* ignore */ }
 const savePrefs = () => { try { localStorage.setItem('eddyscan.prefs', JSON.stringify({ quality: S.quality, filter: S.filter, auto: S.auto })); } catch (e) { /* ignore */ } };
@@ -570,15 +572,15 @@ $('f-photos').addEventListener('change', async () => {
 function newDoc(name) { const d = { id: uid(), name, created: Date.now(), updated: Date.now(), pages: [] }; return d; }
 /* keep the original photo (smaller) only while this scan is open, for fixing edges */
 async function shrinkSrc(img) {
-  const iw = img.naturalWidth || img.videoWidth || img.width, ih = img.naturalHeight || img.videoHeight || img.height; const k = Math.min(1, 3000 / Math.max(iw, ih));
+  const iw = img.naturalWidth || img.videoWidth || img.width, ih = img.naturalHeight || img.videoHeight || img.height; const k = Math.min(1, SRC_MAX / Math.max(iw, ih));
   const c = canvasOf(Math.round(iw * k), Math.round(ih * k)); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   return { blob: await toBlob(c, 'image/jpeg', 0.88), w: c.width, h: c.height };
 }
 
 /* ---------- camera ---------- */
 const C = { stream: null, timer: 0, quad: null, stableSince: 0, armed: true, lastSig: null, prevSig: null, pages: 0, shooting: false, lastThumb: '' };
-async function openCamera() {
-  show('cam'); $('c-err').classList.add('hide'); $('c-auto').classList.toggle('on', S.auto); C.pages = 0; C.armed = true; C.lastSig = null; updateCount();
+async function openCamera(keep) {
+  show('cam'); $('c-err').classList.add('hide'); $('c-auto').classList.toggle('on', S.auto); $('c-q').textContent = Q[S.quality].label; if (!keep) C.pages = 0; C.armed = true; C.lastSig = null; updateCount(); const lp = S.doc && S.doc.pages[S.doc.pages.length - 1]; if (keep && lp) $('c-last').style.backgroundImage = 'url("' + thumbUrl(lp) + '")';
   try {
     C.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } } });
     const v = $('video'); v.srcObject = C.stream; await v.play().catch(() => {});
@@ -627,7 +629,7 @@ async function capture(auto) {
     C.lastSig = signature(v); C.armed = false; C.stableSince = performance.now();
     const quad = detectQuad(c, c.width, c.height) || (auto ? C.quad : null) || FULL;
     let d = S.doc; if (!d) { d = newDoc(defaultName()); d._unnamed = true; S.doc = d; }
-    const id = uid(); const k = Math.min(1, 3000 / Math.max(c.width, c.height)); let src;
+    const id = uid(); const k = Math.min(1, SRC_MAX / Math.max(c.width, c.height)); let src;
     if (k < 1) { const s = canvasOf(Math.round(c.width * k), Math.round(c.height * k)); s.getContext('2d').drawImage(c, 0, 0, s.width, s.height); src = { blob: await toBlob(s, 'image/jpeg', 0.88), w: s.width, h: s.height }; }
     else src = { blob: await toBlob(c, 'image/jpeg', 0.88), w: c.width, h: c.height };
     S.srcs[id] = src; const p = { id, quad, rot: 0, filter: S.filter, quality: S.quality }; d.pages.push(p);
@@ -639,6 +641,31 @@ async function capture(auto) {
   finally { C.shooting = false; }
 }
 $('c-shot').addEventListener('click', () => { C.armed = true; capture(false); });
+/* quality before scanning: Small, Standard, Sharp, Best */
+$('c-q').addEventListener('click', () => {
+  const order = ['small', 'std', 'sharp', 'best']; S.quality = order[(order.indexOf(S.quality) + 1) % order.length]; savePrefs(); $('c-q').textContent = Q[S.quality].label;
+  toast({ small: 'Small: smallest files (about 60–100 KB a page).', std: 'Standard: clear text, small files (about 100–200 KB a page).', sharp: 'Sharp: finer detail (about 250–400 KB a page).', best: 'Best: highest detail for small print and pictures (about 0.6–1.2 MB a page).' }[S.quality], 3500);
+});
+/* a full-resolution still from the iPhone camera app, for the sharpest page */
+$('c-photo').addEventListener('click', async () => {
+  while (C.shooting) await new Promise((r) => setTimeout(r, 80));
+  const inp = $('f-shot'); inp.value = ''; closeCamera();
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; inp.onchange = null;
+    if (f) {
+      busy(true, 'Adding photo…');
+      try {
+        let d = S.doc; if (!d) { d = newDoc(defaultName()); d._unnamed = true; S.doc = d; }
+        const img = await loadImg(f); const src = await shrinkSrc(img); const id = uid(); S.srcs[id] = src;
+        const p = { id, quad: detectQuad(img, img.naturalWidth, img.naturalHeight) || FULL, rot: 0, filter: S.filter, quality: S.quality }; await renderPage(p); d.pages.push(p);
+        C.pages++; if (!d._unnamed) await saveDoc(d);
+      } catch (e) { toast('The photo could not be added: ' + e.message, 4000); } finally { busy(false); }
+    }
+    openCamera(true);
+  };
+  inp.oncancel = () => { inp.onchange = null; openCamera(true); };
+  inp.click();
+});
 $('c-auto').addEventListener('click', () => { S.auto = !S.auto; savePrefs(); $('c-auto').classList.toggle('on', S.auto); toast(S.auto ? 'Auto: pages are taken when you hold still.' : 'Auto off: tap the round button for each page.'); });
 $('c-cancel').addEventListener('click', () => finishCamera());
 $('c-done').addEventListener('click', () => finishCamera());
