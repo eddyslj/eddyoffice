@@ -175,8 +175,8 @@ select.b{padding:0 4px;max-width:160px}
     <div id="fname" title="File name">Presentation1.pptx</div>
     <button type="button" class="tb ghost" id="btn-new">New</button>
     <button type="button" class="tb ghost" id="btn-open">Open file</button>
-    <button type="button" class="tb ghost" id="btn-save">Save as .pptx</button>
-    <button type="button" class="tb ghost hide" id="btn-copy" title="Download a copy and leave the original file as it is">Save a copy</button>
+    <button type="button" class="tb ghost" id="btn-save">Save</button>
+    <button type="button" class="tb ghost" id="btn-copy" title="Save under a new name or in another folder (Ctrl+Shift+S)">Save as…</button>
     <button type="button" class="tb ghost" id="btn-share" title="Send this file with WhatsApp, Mail, AirDrop and other apps">Share</button>
     <button type="button" class="tb ghost" id="btn-present" title="Present from the first slide (F5)">Present</button>
     <button type="button" class="tb ghost" id="btn-present-here" title="Present from this slide (Shift+F5)">From this slide</button>
@@ -355,6 +355,36 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     d.addEventListener('click', async (e) => { const a = e.target.dataset && e.target.dataset.a; if (!a) return; d.remove(); if (a === 'go') { try { await navigator.share({ files: [file], title: file.name }); } catch (er) { if (er.name !== 'AbortError') L.download(file); } } });
   };
   L.download = function (file) { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); };
+  /* Save as: the computer's own save window (choose name and folder). The file then stays linked, so Save writes into it.
+     Browsers without that window (Safari, Firefox, phones) ask for a name and download the file. */
+  L.canSaveAs = typeof window.showSaveFilePicker === 'function';
+  L.saveAs = async function (o) {
+    if (L.canSaveAs) {
+      let h = null;
+      try { const opt = { suggestedName: o.name, types: o.types }; if (L.handle) opt.startIn = L.handle; else opt.startIn = 'documents'; h = await window.showSaveFilePicker(opt); }
+      catch (e) { if (e && e.name === 'AbortError') return null; console.warn(e); try { h = await window.showSaveFilePicker({ suggestedName: o.name, types: o.types }); } catch (e2) { if (e2 && e2.name === 'AbortError') return null; h = null; } }
+      if (h) {
+        const bytes = await o.makeBytes();
+        const w = await h.createWritable(); await w.write(bytes); await w.close();
+        L.handle = h; L.sync(); return { name: h.name, how: 'file' };
+      }
+    }
+    const nm = await L.askName(o.name, o.ext); if (nm == null) return null;
+    const bytes = await o.makeBytes(); L.download(new File([bytes], nm, { type: o.mime })); return { name: nm, how: 'download' };
+  };
+  /* a small box asking for the file name */
+  L.askName = function (name, ext) {
+    return new Promise((res) => {
+      const base = String(name || '').replace(/\.[a-z0-9]{2,5}$/i, '');
+      const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;padding:12vh 16px 16px';
+      d.innerHTML = '<form style="background:#fff;color:#1f2933;border-radius:14px;padding:18px;max-width:420px;width:100%;font:15px system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.3)"><div style="font-weight:700;font-size:17px;margin-bottom:10px">Save as</div><label style="display:block;margin-bottom:6px">File name</label><div style="display:flex;align-items:center;gap:6px"><input type="text" style="flex:1;min-height:42px;border:1px solid #b9bfc7;border-radius:9px;padding:0 10px;font:inherit"><span style="color:#5f6b7a"></span></div><div style="color:#5f6b7a;font-size:13px;margin-top:8px">This browser cannot choose a folder, so the file goes to your Downloads folder (on iPhone you can pick a place in Files).</div><div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px"><button type="button" data-a="no" style="min-height:42px;padding:0 16px;border-radius:9px;border:1px solid #ccd;background:#fff;font:inherit">Cancel</button><button type="submit" style="min-height:42px;padding:0 18px;border-radius:9px;border:0;background:#2b579a;color:#fff;font:inherit;font-weight:700">Save</button></div></form>';
+      const inp = d.querySelector('input'); inp.value = base; d.querySelector('span').textContent = ext; document.body.appendChild(d); setTimeout(() => { inp.focus(); inp.select(); }, 30);
+      const end = (v) => { d.remove(); res(v); };
+      d.querySelector('[data-a="no"]').onclick = () => end(null);
+      inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') end(null); });
+      d.querySelector('form').onsubmit = (e) => { e.preventDefault(); const v = inp.value.replace(/[\\/:*?"<>|]/g, ' ').trim().replace(/\.[a-z0-9]{2,5}$/i, ''); if (!v) { inp.focus(); return; } end(v + ext); };
+    });
+  };
   L.failText = function () {
     if (L.lastError === 'permission') return 'Eddy was not allowed to change the original file, so a copy was saved to your downloads folder instead.';
     return 'The original file could not be changed (it may be open in another program), so a copy was saved to your downloads folder instead.';
@@ -2245,8 +2275,8 @@ EP.closeDialog = function () { $('dialog').classList.add('hide'); $('dialog').in
   document.execCommand('defaultParagraphSeparator', false, 'div');
 
   EP.syncTitle = function () {
-    const linked = EP.linked(); $('btn-save').textContent = linked ? 'Save' : 'Save as .pptx'; $('btn-copy').classList.toggle('hide', !linked);
-    $('btn-save').title = linked ? 'Save your changes into ' + EddyLink.name() : 'Download the presentation as a PowerPoint file';
+    const linked = EP.linked(); $('btn-save').textContent = 'Save';
+    $('btn-save').title = linked ? 'Save your changes into ' + EddyLink.name() + ' (Ctrl+S)' : 'Choose a name and a folder, then save (Ctrl+S)';
     $('fname').textContent = EP.deck.name + (EP.dirty ? '  (unsaved changes)' : ''); document.title = EP.deck.name + ' — Eddy Slides';
   };
   EP.status = function () { const n = EP.deck.slides.length; const s = EP.deck.slides[EP.cur]; const hid = s && s.part.doc.documentElement.getAttribute('show') === '0'; $('status').textContent = n ? 'Slide ' + (EP.cur + 1) + ' of ' + n + (hid ? '  ·  hidden when presenting' : '') : 'No slides'; };
@@ -2381,7 +2411,17 @@ EP.closeDialog = function () { $('dialog').classList.add('hide'); $('dialog').in
   };
   EP.linked = () => !!EddyLink.handle && /\.(pptx|pptm|ppsx|potx)$/i.test(EddyLink.name());
   const MIMES = { pptm: 'application/vnd.ms-powerpoint.presentation.macroEnabled.12', ppsx: 'application/vnd.openxmlformats-officedocument.presentationml.slideshow', potx: 'application/vnd.openxmlformats-officedocument.presentationml.template' };
+  /* Save as: pick a name and a folder */
+  EP.saveAs = async function () {
+    try {
+      const m = /\.(pptm|ppsx|potx)$/i.exec(EP.deck.name); const ext = m ? '.' + m[1].toLowerCase() : '.pptx';
+      const mime = MIMES[ext.slice(1)] || 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      const r = await EddyLink.saveAs({ name: EP.deck.name.replace(/\.(pptx|pptm|ppsx|potx|ppt)$/i, '') + ext, ext, types: [{ description: 'PowerPoint presentation', accept: { [mime]: [ext] } }], mime, makeBytes: () => EP.savePptx() });
+      if (!r) return; EP.deck.name = r.name; EP.dirty = false; EP.syncTitle(); EP.toast(r.how === 'file' ? 'Saved ' + r.name + '. Save will keep writing to this file.' : 'Saved ' + r.name + ' to your downloads folder.');
+    } catch (e) { console.error(e); EP.toast('The file could not be saved: ' + (e && e.message ? e.message : e), 8000); }
+  };
   EP.save = async function (copy) {
+    if (copy !== true && !EP.linked()) return EP.saveAs();
     try {
       const bytes = await EP.savePptx(); let name = EP.deck.name; if (!/\.(pptx|pptm|ppsx|potx)$/i.test(name)) name += '.pptx';
       const mime = MIMES[(name.split('.').pop() || '').toLowerCase()] || 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -2396,7 +2436,7 @@ EP.closeDialog = function () { $('dialog').classList.add('hide'); $('dialog').in
   $('file').addEventListener('change', () => { const f = $('file').files[0]; $('file').value = ''; if (f) EP.openFile(f); });
   $('btn-new').addEventListener('click', async () => { if (EP.dirty && !window.confirm('You have unsaved changes. Start a new presentation and lose them?')) return; EddyLink.handle = null; EP.base = []; await EP.newDeck(); afterLoad(); });
   $('btn-save').addEventListener('click', () => EP.save());
-  $('btn-copy').addEventListener('click', () => EP.save(true));
+  $('btn-copy').addEventListener('click', () => EP.saveAs());
   $('btn-share').addEventListener('click', () => { let name = EP.deck.name; if (!/\.(pptx|pptm|ppsx|potx)$/i.test(name)) name += '.pptx'; EddyLink.share(() => EP.savePptx(), name, MIMES[(name.split('.').pop() || '').toLowerCase()] || 'application/vnd.openxmlformats-officedocument.presentationml.presentation'); });
   $('btn-present').addEventListener('click', () => EP.present(false));
   $('btn-present-here').addEventListener('click', () => EP.present(true));
@@ -2407,7 +2447,7 @@ EP.closeDialog = function () { $('dialog').classList.add('hide'); $('dialog').in
     if (e.key === 'F5') { e.preventDefault(); EP.present(e.shiftKey); return; }
     const ctrl = e.ctrlKey || e.metaKey; if (!ctrl) return; const k = e.key.toLowerCase();
     if (!$('printview').classList.contains('hide')) { if (k === 'p') { e.preventDefault(); EP.print(); } return; }
-    if (k === 's') { e.preventDefault(); EP.save(); } else if (k === 'p') { e.preventDefault(); EP.printOpen(); } else if (k === 'o') { e.preventDefault(); EddyLink.pick(); }
+    if (k === 's') { e.preventDefault(); if (e.shiftKey) EP.saveAs(); else EP.save(); } else if (k === 'p') { e.preventDefault(); EP.printOpen(); } else if (k === 'o') { e.preventDefault(); EddyLink.pick(); }
     else if (k === 'm') { e.preventDefault(); EP.newSlide(); }
     else if (!EP.editing && (k === 'z' || k === 'y')) { if (e.target.closest && e.target.closest('input,select,textarea')) return; e.preventDefault(); if (k === 'z' && !e.shiftKey) EP.undo(); else EP.redo(); }
   });
